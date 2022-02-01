@@ -6,26 +6,37 @@
   min-height: 750px;
 }
 
+.u-section-1 .u-custom-html-1 {
+  height: auto;
+  min-height: 507px;
+  width: 360px;
+  margin: 30px auto;
+}
+
 @media (max-width: 1199px) {
   .u-section-1 .u-sheet-1 {
-    min-height: 417px;
+    min-height: 468px;
   }
 }
 
 @media (max-width: 991px) {
   .u-section-1 .u-sheet-1 {
-    min-height: 319px;
+    min-height: 358px;
   }
 }
 
 @media (max-width: 767px) {
   .u-section-1 .u-sheet-1 {
-    min-height: 239px;
+    min-height: 269px;
   }
 }
 
 @media (max-width: 575px) {
   .u-section-1 .u-sheet-1 {
-    min-height: 150px;
+    min-height: 169px;
+  }
+
+  .u-section-1 .u-custom-html-1 {
+    width: 340px;
   }
 }
