@@ -1,370 +1,403 @@
-/*
-
-Three.js + Cannon.js video tutorial explaining the source code
-
-Youtube: https://youtu.be/hBiGFpBle7E
-SkillShare: https://skl.sh/3uREVvq 
-
-In the tutorial, we go through the source code of this game. We cover, how to set up a Three.js scene with box objects, how to add lights, how to set up the camera, how to add animation and event handlers, and finally, we add physics simulation with Cannon.js.
-
-Comparing to the tutorial this version has some extra features: 
-- autopilot mode before the game starts
-- introduction and result screens
-- score indicator showing the level of layers added
-- you can also control the game with touch events and by pressing the space key
-- you can reset the game
-- the game stops once a block went over the stack
-- once the game failed the last block falls down
-- the game reacts to window resizing
-
-Check out my YouTube channel for other game tutorials: https://www.youtube.com/channel/UCxhgW0Q5XLvIoXHAfQXg9oQ
-
-*/
-
-window.focus(); // Capture keys right away (by default focus is on editor)
-
-let camera, scene, renderer; // ThreeJS globals
-let world; // CannonJs world
-let lastTime; // Last timestamp of animation
-let stack; // Parts that stay solid on top of each other
-let overhangs; // Overhanging parts that fall down
-const boxHeight = 1; // Height of each layer
-const originalBoxSize = 3; // Original width and height of a box
-let autopilot;
-let gameEnded;
-let robotPrecision; // Determines how precise the game is on autopilot
-
-const scoreElement = document.getElementById("score");
-const instructionsElement = document.getElementById("instructions");
-const resultsElement = document.getElementById("results");
-
-init();
-
-// Determines how precise the game is on autopilot
-function setRobotPrecision() {
-  robotPrecision = Math.random() * 1 - 0.5;
-}
-
-function init() {
-  autopilot = true;
-  gameEnded = false;
-  lastTime = 0;
-  stack = [];
-  overhangs = [];
-  setRobotPrecision();
-
-  // Initialize CannonJS
-  world = new CANNON.World();
-  world.gravity.set(0, -10, 0); // Gravity pulls things down
-  world.broadphase = new CANNON.NaiveBroadphase();
-  world.solver.iterations = 40;
-
-  // Initialize ThreeJs
-  const aspect = window.innerWidth / window.innerHeight;
-  const width = 10;
-  const height = width / aspect;
-
-  camera = new THREE.OrthographicCamera(
-    width / -2, // left
-    width / 2, // right
-    height / 2, // top
-    height / -2, // bottom
-    0, // near plane
-    100 // far plane
-  );
-
-  /*
-  // If you want to use perspective camera instead, uncomment these lines
-  camera = new THREE.PerspectiveCamera(
-    45, // field of view
-    aspect, // aspect ratio
-    1, // near plane
-    100 // far plane
-  );
-  */
-
-  camera.position.set(4, 4, 4);
-  camera.lookAt(0, 0, 0);
-
-  scene = new THREE.Scene();
-
-  // Foundation
-  addLayer(0, 0, originalBoxSize, originalBoxSize);
-
-  // First layer
-  addLayer(-10, 0, originalBoxSize, originalBoxSize, "x");
-
-  // Set up lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-  scene.add(ambientLight);
-
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-  dirLight.position.set(10, 20, 0);
-  scene.add(dirLight);
-
-  // Set up renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setAnimationLoop(animation);
-  document.body.appendChild(renderer.domElement);
-}
-
-function startGame() {
-  autopilot = false;
-  gameEnded = false;
-  lastTime = 0;
-  stack = [];
-  overhangs = [];
-
-  if (instructionsElement) instructionsElement.style.display = "none";
-  if (resultsElement) resultsElement.style.display = "none";
-  if (scoreElement) scoreElement.innerText = 0;
-
-  if (world) {
-    // Remove every object from world
-    while (world.bodies.length > 0) {
-      world.remove(world.bodies[0]);
-    }
-  }
-
-  if (scene) {
-    // Remove every Mesh from the scene
-    while (scene.children.find((c) => c.type == "Mesh")) {
-      const mesh = scene.children.find((c) => c.type == "Mesh");
-      scene.remove(mesh);
-    }
-
-    // Foundation
-    addLayer(0, 0, originalBoxSize, originalBoxSize);
-
-    // First layer
-    addLayer(-10, 0, originalBoxSize, originalBoxSize, "x");
-  }
-
-  if (camera) {
-    // Reset camera positions
-    camera.position.set(4, 4, 4);
-    camera.lookAt(0, 0, 0);
-  }
-}
-
-function addLayer(x, z, width, depth, direction) {
-  const y = boxHeight * stack.length; // Add the new box one layer higher
-  const layer = generateBox(x, y, z, width, depth, false);
-  layer.direction = direction;
-  stack.push(layer);
-}
-
-function addOverhang(x, z, width, depth) {
-  const y = boxHeight * (stack.length - 1); // Add the new box one the same layer
-  const overhang = generateBox(x, y, z, width, depth, true);
-  overhangs.push(overhang);
-}
-
-function generateBox(x, y, z, width, depth, falls) {
-  // ThreeJS
-  const geometry = new THREE.BoxGeometry(width, boxHeight, depth);
-  const color = new THREE.Color(`hsl(${30 + stack.length * 4}, 100%, 50%)`);
-  const material = new THREE.MeshLambertMaterial({ color });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(x, y, z);
-  scene.add(mesh);
-
-  // CannonJS
-  const shape = new CANNON.Box(
-    new CANNON.Vec3(width / 2, boxHeight / 2, depth / 2)
-  );
-  let mass = falls ? 5 : 0; // If it shouldn't fall then setting the mass to zero will keep it stationary
-  mass *= width / originalBoxSize; // Reduce mass proportionately by size
-  mass *= depth / originalBoxSize; // Reduce mass proportionately by size
-  const body = new CANNON.Body({ mass, shape });
-  body.position.set(x, y, z);
-  world.addBody(body);
-
-  return {
-    threejs: mesh,
-    cannonjs: body,
-    width,
-    depth
-  };
-}
-
-function cutBox(topLayer, overlap, size, delta) {
-  const direction = topLayer.direction;
-  const newWidth = direction == "x" ? overlap : topLayer.width;
-  const newDepth = direction == "z" ? overlap : topLayer.depth;
-
-  // Update metadata
-  topLayer.width = newWidth;
-  topLayer.depth = newDepth;
-
-  // Update ThreeJS model
-  topLayer.threejs.scale[direction] = overlap / size;
-  topLayer.threejs.position[direction] -= delta / 2;
-
-  // Update CannonJS model
-  topLayer.cannonjs.position[direction] -= delta / 2;
-
-  // Replace shape to a smaller one (in CannonJS you can't simply just scale a shape)
-  const shape = new CANNON.Box(
-    new CANNON.Vec3(newWidth / 2, boxHeight / 2, newDepth / 2)
-  );
-  topLayer.cannonjs.shapes = [];
-  topLayer.cannonjs.addShape(shape);
-}
-
-window.addEventListener("mousedown", eventHandler);
-window.addEventListener("touchstart", eventHandler);
-window.addEventListener("keydown", function (event) {
-  if (event.key == " ") {
-    event.preventDefault();
-    eventHandler();
-    return;
-  }
-  if (event.key == "R" || event.key == "r") {
-    event.preventDefault();
-    startGame();
-    return;
-  }
-});
-
-function eventHandler() {
-  if (autopilot) startGame();
-  else splitBlockAndAddNextOneIfOverlaps();
-}
-
-function splitBlockAndAddNextOneIfOverlaps() {
-  if (gameEnded) return;
-
-  const topLayer = stack[stack.length - 1];
-  const previousLayer = stack[stack.length - 2];
-
-  const direction = topLayer.direction;
-
-  const size = direction == "x" ? topLayer.width : topLayer.depth;
-  const delta =
-    topLayer.threejs.position[direction] -
-    previousLayer.threejs.position[direction];
-  const overhangSize = Math.abs(delta);
-  const overlap = size - overhangSize;
-
-  if (overlap > 0) {
-    cutBox(topLayer, overlap, size, delta);
-
-    // Overhang
-    const overhangShift = (overlap / 2 + overhangSize / 2) * Math.sign(delta);
-    const overhangX =
-      direction == "x"
-        ? topLayer.threejs.position.x + overhangShift
-        : topLayer.threejs.position.x;
-    const overhangZ =
-      direction == "z"
-        ? topLayer.threejs.position.z + overhangShift
-        : topLayer.threejs.position.z;
-    const overhangWidth = direction == "x" ? overhangSize : topLayer.width;
-    const overhangDepth = direction == "z" ? overhangSize : topLayer.depth;
-
-    addOverhang(overhangX, overhangZ, overhangWidth, overhangDepth);
-
-    // Next layer
-    const nextX = direction == "x" ? topLayer.threejs.position.x : -10;
-    const nextZ = direction == "z" ? topLayer.threejs.position.z : -10;
-    const newWidth = topLayer.width; // New layer has the same size as the cut top layer
-    const newDepth = topLayer.depth; // New layer has the same size as the cut top layer
-    const nextDirection = direction == "x" ? "z" : "x";
-
-    if (scoreElement) scoreElement.innerText = stack.length - 1;
-    addLayer(nextX, nextZ, newWidth, newDepth, nextDirection);
-  } else {
-    missedTheSpot();
-  }
-}
-
-function missedTheSpot() {
-  const topLayer = stack[stack.length - 1];
-
-  // Turn to top layer into an overhang and let it fall down
-  addOverhang(
-    topLayer.threejs.position.x,
-    topLayer.threejs.position.z,
-    topLayer.width,
-    topLayer.depth
-  );
-  world.remove(topLayer.cannonjs);
-  scene.remove(topLayer.threejs);
-
-  gameEnded = true;
-  if (resultsElement && !autopilot) resultsElement.style.display = "flex";
-}
-
-function animation(time) {
-  if (lastTime) {
-    const timePassed = time - lastTime;
-    const speed = 0.008;
-
-    const topLayer = stack[stack.length - 1];
-    const previousLayer = stack[stack.length - 2];
-
-    // The top level box should move if the game has not ended AND
-    // it's either NOT in autopilot or it is in autopilot and the box did not yet reach the robot position
-    const boxShouldMove =
-      !gameEnded &&
-      (!autopilot ||
-        (autopilot &&
-          topLayer.threejs.position[topLayer.direction] <
-            previousLayer.threejs.position[topLayer.direction] +
-              robotPrecision));
-
-    if (boxShouldMove) {
-      // Keep the position visible on UI and the position in the model in sync
-      topLayer.threejs.position[topLayer.direction] += speed * timePassed;
-      topLayer.cannonjs.position[topLayer.direction] += speed * timePassed;
-
-      // If the box went beyond the stack then show up the fail screen
-      if (topLayer.threejs.position[topLayer.direction] > 10) {
-        missedTheSpot();
-      }
-    } else {
-      // If it shouldn't move then is it because the autopilot reached the correct position?
-      // Because if so then next level is coming
-      if (autopilot) {
-        splitBlockAndAddNextOneIfOverlaps();
-        setRobotPrecision();
-      }
-    }
-
-    // 4 is the initial camera height
-    if (camera.position.y < boxHeight * (stack.length - 2) + 4) {
-      camera.position.y += speed * timePassed;
-    }
-
-    updatePhysics(timePassed);
-    renderer.render(scene, camera);
-  }
-  lastTime = time;
-}
-
-function updatePhysics(timePassed) {
-  world.step(timePassed / 1000); // Step the physics world
-
-  // Copy coordinates from Cannon.js to Three.js
-  overhangs.forEach((element) => {
-    element.threejs.position.copy(element.cannonjs.position);
-    element.threejs.quaternion.copy(element.cannonjs.quaternion);
-  });
-}
-
-window.addEventListener("resize", () => {
-  // Adjust camera
-  console.log("resize", window.innerWidth, window.innerHeight);
-  const aspect = window.innerWidth / window.innerHeight;
-  const width = 10;
-  const height = width / aspect;
-
-  camera.top = height / 2;
-  camera.bottom = height / -2;
-
-  // Reset renderer
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.render(scene, camera);
-});
+/*** FUNCTIONS LOCATED IN <HEAD> TAG ON SETTINGS MENU ***/
+
+/*** READY ***/
+
+(function() {
+
+
+	//CALCULATE ORDER
+	function calcUpDown(){
+		var ulPanels = document.querySelectorAll(".section");
+		for (var x=0; x<ulPanels.length; x++){
+			var upLink = ulPanels[x].querySelectorAll(".up");
+			for (var i = 0; i < upLink.length; i++) {
+				upLink[i].removeEventListener('click',upListener);
+				upLink[i].addEventListener('click', upListener); 
+			}
+			var downLink = ulPanels[x].querySelectorAll(".down");
+			for (var i = 0; i < downLink.length; i++) {
+				downLink[i].removeEventListener('click',downListener);
+				downLink[i].addEventListener('click', downListener); 
+			}
+		}		
+	}
+
+
+	//TO DO button
+	var toDoButton = elem('addToDo');
+	var toDoList =  elem('ul-todo');
+	toDoButton.addEventListener('click',function(){
+		
+		var newList = document.createElement("li");
+		newList.innerHTML = '<span class="txt">New Task</span><span class="idTask"></span><a class="up" href="#"></a><a class="down" href="#"></a><a class="delete" onclick="delTask(event, this.parentNode)" href="#"></a>';
+		
+		var lis = document.getElementsByTagName('li');
+		var finalID;
+		if(lis.length == 0){
+			finalID = '0001';
+		} else {
+			var ids = [];
+			for (var i =0; i<lis.length; i++){
+				console.log(lis[i].getAttribute('id').slice(3));
+				ids.push(lis[i].getAttribute('id').slice(3));
+			}	
+			finalID = parseInt(ids.sort().pop());
+			finalID++;
+			while (finalID.toString().length < 4) {
+				finalID = '0'+finalID;
+			}
+		}
+		
+		newList.setAttribute('id','li-'+finalID);
+		newList.setAttribute('draggable','true');
+		newList.setAttribute('ondragstart','drag(event)');
+		newList.setAttribute('ontouchstart','drag(event)'); /*touch event*/
+		
+		newList.childNodes[1].innerText = finalID;
+		
+		toDoList.prepend(newList);	
+		changeTask();
+		calcUpDown();
+		
+		var aux = elem("ul-todo").firstChild;
+		var foo = aux.children[0];
+		foo.click();
+		
+		countTask();
+		
+		saveBoards();
+		
+	});
+	
+	//OK BUTTON
+	var okButton = elem('taskButton');
+	okButton.addEventListener('click',function(){
+		var newText =  elem('taskText');
+		var theTask = elem(globalID).getElementsByTagName('span')[0];
+		result = newText.value;
+		if(result==''){
+			newText.setAttribute('placeholder','escribe algo...')
+		} else {
+			theTask.innerText = result;
+			closeModal();
+			saveBoards();
+		}
+		
+		
+	});
+	
+	//CLOSE MODAL
+	var closeBox = elem('modalClose');
+	closeBox.onclick=closeModal;
+	var closeOverlay = elem('modalOverlay');
+	closeOverlay.onclick=closeModal;
+	
+	//DELETE BUTTON
+	var deleteButton = elem('deleteItem');
+	deleteButton.addEventListener('click',function(){
+	
+		if(elem('totalTask').innerHTML == '0') return;
+	
+		if(localStorage.getItem('OptHideConfirm')!== null){
+			//borrar del tiron
+			localStorage.removeItem('listToDo');
+			localStorage.removeItem('listWorking');
+			localStorage.removeItem('listUrgent');
+			localStorage.removeItem('listDone');
+			localStorage.setItem('listToDo','');
+			location.href = location.href;
+			//location.reload();
+		} else {
+			//alert('¿DELETE ALL?');
+			//preguntar antes
+			elem('confirmTitle').innerHTML = 'TODAS LAS TAREAS';
+			elem('confirmDelete').style.display = 'block';
+			elem('confirmBox').style.display = 'block';
+			//confirm delete
+			var delConfirm = elem("confirmBtn");
+			delConfirm.addEventListener('click', function() {
+				localStorage.removeItem('listToDo');
+				localStorage.removeItem('listWorking');
+				localStorage.removeItem('listUrgent');
+				localStorage.removeItem('listDone');
+				localStorage.setItem('listToDo','');
+				location.href = location.href;
+				//location.reload();
+				//elem('confirmDelete').style.display = 'none';
+				//elem('confirmBox').style.display = 'none';
+			});
+			//cancel delete
+			var canConfirm = elem("confirmCls");
+			canConfirm.addEventListener('click', function() {
+				elem('confirmDelete').style.display = 'none';
+				elem('confirmBox').style.display = 'none';
+			});
+			
+			
+			
+		}
+	
+	});
+	
+	
+	//ADD URGENT LIST
+	var urgentBoard = elem('addUrgent');
+	urgentBoard.addEventListener('click',function(){
+		if(elem('ur-gent')){ //remove
+			
+			var urgTskNum = elem('ur-gent').childNodes[1].childNodes.length;
+			if(urgTskNum == 0){
+				//alert('sin tareas');
+				this.parentNode.classList.remove("active");
+				//alert('hay urgent');
+				elem('myLists').classList.remove('fourCol');
+				elem('ur-gent').remove();
+				saveBoards();
+			} else {
+				//alert('con tareas');
+				if(localStorage.getItem('OptHideConfirmUrgent') == null){
+					elem('confirmDelete').style.display='block';
+					elem('confirmUrgent').style.display='block';
+					elem('numTaskUrg').innerHTML = urgTskNum;
+					if(urgTskNum==1) elem('pluralTsk').style.display='none'; else elem('pluralTsk').removeAttribute('style');
+					
+					//confirm remove
+					var delConfirmUrgent = elem("confirmUrgentBtn");
+					delConfirmUrgent.addEventListener('click', function() {
+						elem('addUrgent').parentNode.classList.remove("active");
+						elem('myLists').classList.remove('fourCol');
+						if(elem('ur-gent')) elem('ur-gent').remove();
+						saveBoards();
+						elem('confirmDelete').style.display='none';
+						elem('confirmUrgent').style.display='none';
+					});
+					//cancel remove
+					var canConfirmUrgent = elem("confirmUrgentCls");
+					canConfirmUrgent.addEventListener('click', function() {
+						elem('confirmDelete').style.display = 'none';
+						elem('confirmUrgent').style.display = 'none';
+					});
+				} else {
+					//alert('sin tareas');
+					this.parentNode.classList.remove("active");
+					//alert('hay urgent');
+					elem('ur-gent').remove();
+					saveBoards();
+				}
+				
+				
+			}
+			
+			
+		} else { //add
+			this.parentNode.classList.add("active");
+			elem('myLists').classList.add('fourCol');
+			var newBoard = document.createElement("div");
+			newBoard.innerHTML = '<h3>Urgent <span>0</span></h3><ul id="ul-urgent" class="section" ondrop="drop(event, this)" ondragover="allowDrop(event)" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></ul>';
+			newBoard.setAttribute('id','ur-gent');
+			elem('myLists').insertBefore(newBoard, elem('do-ne'));
+			if(elem('do-ne').className=='full') elem('ur-gent').className='full';
+			if(elem('do-ne').getAttribute('style')!=null) elem('ur-gent').setAttribute('style', elem('do-ne').getAttribute('style'));
+			saveBoards();
+		}
+	});
+	
+	
+	
+
+	//DONT SHOW MESSAGE AGAIN
+	var checkConfirm = elem("dontShowAgain");
+	checkConfirm.addEventListener('change', function() {
+		if (this.checked) {
+			localStorage.setItem('OptHideConfirm','true');
+			document.querySelector('.deleteWarnig').classList.remove('showWng');
+			elem('textWarning').innerHTML = 'SHOW';
+		} else {
+			localStorage.removeItem('OptHideConfirm');
+			document.querySelector('.deleteWarnig').classList.add('showWng');
+			elem('textWarning').innerHTML = 'HIDE';
+		}
+	});
+	
+	//DONT SHOW MESSAGE URGENT AGAIN
+	var checkConfirmUrgent = elem("dontShowAgainUrgent");
+	checkConfirmUrgent.addEventListener('change', function() {
+		if (this.checked) {
+			localStorage.setItem('OptHideConfirmUrgent','true');
+		} else {
+			localStorage.removeItem('OptHideConfirmUrgent');
+		}
+	});
+	
+	
+	
+	
+	
+	//CHANGE BACKGROUND IMAGE
+	var bg = document.getElementsByClassName('overlay-bg');
+	var bgClass = bg[0];
+	
+	var changeBgImg = document.querySelectorAll('#bgOptions > span'); 
+	for(var i=0; i<changeBgImg.length; i++){
+		
+		changeBgImg[i].addEventListener('click',function(){
+			
+			var allOpt = this.parentNode.children;
+			for(var x=0; x<allOpt.length; x++){
+				
+				if (window.CP.shouldStopExecution(1)) {
+      	  break;
+    		}
+				
+				allOpt[x].removeAttribute('class');
+			}
+			
+			window.CP.exitedLoop(1);
+			
+			this.classList.add('selected');
+			//aqui
+			if(this.innerText.toLowerCase() =='none') bgClass.className = 'overlay-bg';
+			
+			if(this.innerText.toLowerCase() =='url'){ 
+			
+				bgClass.className = 'overlay-bg';
+			
+				elem('byUrl').style.display = 'block';
+				
+				if(localStorage.getItem('OptBackgroundImageUrl') !== null){
+					bgClass.setAttribute('style','background-image:url('+localStorage.getItem('OptBackgroundImageUrl')+') #fff0;');
+				}
+			} else { 
+				bgClass.removeAttribute('style'); 
+				elem('byUrl').removeAttribute('style');
+				
+				bgClass.className = 'overlay-bg ' + this.innerText.toLowerCase();
+				
+			}
+			
+			localStorage.setItem('OptBackgroundImage', this.innerText);
+			
+		});
+		
+		
+	}
+	
+	
+	
+	//IMPORT
+	var inputImport = elem('impFile');   
+	inputImport.addEventListener('change', () => { 
+		var files = inputImport.files; 
+		if (files.length == 0) return; 
+		const file = files[0];
+		var reader = new FileReader(); 
+		reader.onload = (e) => { 
+			const file = e.target.result; 
+			const lines = file.split(/\r\n|\n/); 
+			//textarea.value = lines.join('\n'); 
+			var toImport = lines.join('\n');
+			var byLine = toImport.split("\n");
+			for(var i = 0; i<byLine.length-1; i++){
+				var toStore = byLine[i].split(' : ');
+				localStorage.setItem(toStore[0],toStore[1]);
+			}
+			//location.reload();
+		}; 
+		reader.onerror = (e) => alert(e.target.error.name); 
+		reader.readAsText(file); 
+		
+		location.href = location.href;
+		
+	}); 
+	
+	
+	
+	
+	//HELP
+	var closeHelp = elem('helpClose');   
+	closeHelp.addEventListener('click', () => { 
+		elem('help').click();
+	}); 
+	
+	
+	
+	//IF SAVED
+	if(localStorage.getItem('listToDo') != null){
+		elem('ul-todo').innerHTML = localStorage.getItem('listToDo');
+		elem('ul-working').innerHTML = localStorage.getItem('listWorking');
+		elem('ul-done').innerHTML = localStorage.getItem('listDone');
+		
+		if(localStorage.getItem('listUrgent') !== null){
+			//alert('no es null');
+			elem('myLists').classList.add('fourCol');
+			var newBoard = document.createElement("div");
+			newBoard.innerHTML = '<h3>Urgent <span></span></h3><ul id="ul-urgent" class="section" ondrop="drop(event, this)" ondragover="allowDrop(event)" ondragenter="dragEnter(event)" ondragleave="dragLeave(event)"></ul>';
+			newBoard.setAttribute('id','ur-gent');				
+			elem('myLists').insertBefore(newBoard, elem('do-ne'));
+				
+			elem('addUrgent').parentNode.classList.add("active");
+			
+			if(localStorage.getItem('listUrgent') == ''){	
+				//saveBoards();
+				//elem('ul-urgent').innerHTML = localStorage.getItem('listUrgent');
+				//var urgentContent = elem('ul-urgent').innerHTML;
+			} else {
+				//alert('no esta vacio');
+				elem('ul-urgent').innerHTML = localStorage.getItem('listUrgent');
+			}
+			
+		} else {
+			//alert('si es null');
+		}
+		
+		
+		
+		
+	}
+	
+	//OPTIONS
+	if(localStorage.getItem('OptShowOptions') !== null){
+		document.querySelector('.options').classList.toggle('opened');
+		elem('openOptions').innerText = 'CLOSE';
+	}
+	//IMAGE
+	if(localStorage.getItem('OptBackgroundImage') !== null){
+		var x = document.querySelectorAll('#bgOptions > span');
+		for(var i=0; i<x.length; i++){
+			if(x[i].innerText == localStorage.getItem('OptBackgroundImage')){
+				if(localStorage.getItem('OptBackgroundImage')!= 'URL'){
+					x[i].click();
+				} else {
+					x[i].classList.add('selected');
+					elem('bg-image').setAttribute('style','background-image:url('+ localStorage.getItem('OptBackgroundImageUrl') +')');
+				}
+			}
+		}
+	}
+	//HEIGHT
+	if(localStorage.getItem('OptFullBoard') !== null){
+		elem('boardFull').click();
+	}
+	//OPACITY
+	if(localStorage.getItem('OptOpacityLevel') !== null){
+		elem('boardOpac').value = localStorage.getItem('OptOpacityLevel');
+		showOpac(localStorage.getItem('OptOpacityLevel'));
+	}
+	//CONFIRM
+	if(localStorage.getItem('OptHideConfirm') !== null){
+		document.querySelector('.deleteWarnig').classList.remove('showWng');
+		elem('textWarning').innerHTML = 'SHOW';
+	} else {
+		document.querySelector('.deleteWarnig').classList.add('showWng');
+		elem('textWarning').innerHTML = 'HIDE';
+	}
+	
+	
+	changeTask();
+	
+	calcUpDown();
+	
+	countTask();
+	
+	
+})();
